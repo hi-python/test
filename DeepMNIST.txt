@@ -1,0 +1,220 @@
+from tensorflow.examples.tutorials.mnist import input_data
+mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+
+# 画像表示用に追加
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+
+#Jupyterでインライン表示するための宣言
+%matplotlib inline
+
+import tensorflow as tf
+sess = tf.InteractiveSession()
+
+# TensorBoard情報出力ディレクトリ
+log_dir = '/tmp/tensorflow/mnist/logs/DeepMNIST21_300'
+
+# 指定したディレクトリがあれば削除し、再作成
+if tf.gfile.Exists(log_dir):
+    tf.gfile.DeleteRecursively(log_dir)
+tf.gfile.MakeDirs(log_dir)
+
+# 変数を加工してTensorBoard出力する関数
+def variable_summaries(var):
+    # 変数Summaries
+    with tf.name_scope('summaries'):
+        mean = tf.reduce_mean(var)                      #Scalar出力(平均)
+        tf.summary.scalar('mean', mean)
+        with tf.name_scope('stddev'):
+            stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+        tf.summary.scalar('stddev', stddev)             #Scalar出力(標準偏差)
+        tf.summary.scalar('max', tf.reduce_max(var))    #Scalar出力(最大値)
+        tf.summary.scalar('min', tf.reduce_min(var))    #Scalar出力(最小値)
+        tf.summary.histogram('histogram', var)          #ヒストグラム出力
+
+# Input placeholders & 画像変換
+with tf.name_scope('input'):
+    # placeholder
+    x = tf.placeholder(tf.float32, shape=[None, 784])
+    y_ = tf.placeholder(tf.float32, shape=[None, 10])
+
+    # 画像を28×28に変換
+    x_image = tf.reshape(x, [-1, 28, 28, 1])
+    tf.summary.image('preprocess', x_image, 10)
+
+# variable
+with tf.name_scope('weight'):
+    W = tf.Variable(tf.zeros([784,10]))
+    variable_summaries(W)
+
+with tf.name_scope('biases'):
+    b = tf.Variable(tf.zeros([10]))
+    variable_summaries(b)
+
+# weight_variablesを定義、実態は5,5,1,32の配列。
+def weight_variable(shape):
+    with tf.name_scope('w_stdev'):
+        initial = tf.truncated_normal(shape, stddev=0.1)
+        return tf.Variable(initial)
+
+# bias_variableを定義、実態は0.1が32個入った一次元配列
+def bias_variable(shape):
+    with tf.name_scope('bias_cont'):
+      initial = tf.constant(0.1, shape=shape)
+      return tf.Variable(initial)
+
+""" 
+Convolution
+    input, filter, strides, paddingの順番
+    input : 4次元配列 [batch, in_height, in_width, in_channels]
+    filter： [filter_height, filter_width, in_channels, out_channels]
+    strides : [1, stride, stride, 1] 畳み込み適用間隔
+    padding : SAMEを使うとゼロパディング
+    参考：https://qiita.com/tadOne/items/b484ce9f973a9f80036e
+"""
+def conv2d(x, W):
+    with tf.name_scope('conv2d'):
+        return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
+
+"""
+Pooling
+    最大値をとるようにPoolingする。value, ksize, stides, paddingの準
+    value : input、convolutionからのOutputをそのまま使用する
+    ksize：プーリングサイズ 下記は2*2の場合 stidesが2なので画像サイズは4分の1になる
+"""
+def max_pool_2x2(x):
+    with tf.name_scope('max_pool'):
+        return tf.nn.max_pool(x, ksize=[1, 2, 2, 1],
+                            strides=[1, 2, 2, 1], padding='SAME')
+
+# 第一層のweightとbiasのvariable
+# weightはcovolutionのfilterに使用。height=5, width=5, in=1, out=32
+# 配列としては32次元 * 1 * 5 * 5　で -0.2 ～ 0.2の値が標準偏差0.1で入っている
+# 5*5のパッチサイズを動かしていくイメージ。
+"""後で変えて結果がどうなるか確認する！"""
+with tf.name_scope('weights1'):
+    W_conv1 = weight_variable([5, 5, 1, 32])
+#    W_conv1 = weight_variable([20, 20, 1, 32])
+    variable_summaries(W_conv1)
+    
+    #Tensorを[5,5,1,32]から[32,5,5,1]と順列変換してimage出力
+    tf.summary.image('filter', tf.transpose(W_conv1,perm=[3,0,1,2]), 10)
+
+with tf.name_scope('biases1'):
+    b_conv1 = bias_variable([32])
+
+# 画像を28x28(=784)にreshape, xのplaceholderに合わせるため
+# -1を指定しているので一次元配列にreshapeされる
+# 一次元 * 28 * 28 * 1(gray scale, colorの場合は3にする)
+# 参考：https://www.tensorflow.org/api_docs/python/tf/reshape
+x_image = tf.reshape(x, [-1, 28, 28, 1])
+
+# TensorBoard向け出力
+#tf.summary.image(log_dir, x_image, 10)
+
+# convolution層とpool層を適用。convolution層適用後に
+with tf.name_scope('conv_pool_1'):
+    h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1)
+    tf.summary.histogram('activations', h_conv1)
+    h_pool1 = max_pool_2x2(h_conv1)
+
+# 第２層のconvolutionとPool
+# 1層と同様5*5のパッチを動かしていく、ただしinputは第一層の出力結果32に、Otuputは2倍の64にしている
+with tf.name_scope('weights1'):
+    W_conv2 = weight_variable([5, 5, 32, 64])
+with tf.name_scope('biases2'):
+    b_conv2 = bias_variable([64])
+
+with tf.name_scope('conv_pool_2'):
+    h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
+    h_pool2 = max_pool_2x2(h_conv2)
+
+# 配列を1次元配列に戻す
+# h_pool2は1,7,7,64の配列。1024個の特徴変数があることとする（1024は決め）
+# 最終的にはh_fc1に写真数 * 1024配列が出力される
+""" 後からこの1024も変えてみる """
+with tf.name_scope('single_tensor'):
+    W_fc1 = weight_variable([7 * 7 * 64, 1024])
+    b_fc1 = bias_variable([1024])
+
+    h_pool2_flat = tf.reshape(h_pool2, [-1, 7*7*64])
+    h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
+
+# 過学習を防ぐDropout処理
+# keep_prob = 0.5なら半分の特徴量が無くなる
+with tf.name_scope('dropout'):
+    keep_prob = tf.placeholder(tf.float32)
+    tf.summary.scalar('dropout_keep_probability', keep_prob)
+    h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
+
+# readoutレイヤ, softmaxを使用する
+with tf.name_scope('reedout'):
+    W_fc2 = weight_variable([1024, 10])
+    b_fc2 = bias_variable([10])
+
+    y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
+
+# トレーニング方法定義
+with tf.name_scope('cross_entropy'):
+    cross_entropy = tf.reduce_mean(
+        tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y_conv))
+    tf.summary.scalar('cross_entropy', cross_entropy)
+    
+with tf.name_scope('train'):
+    train_step = tf.train.AdamOptimizer(1e-4).minimize(cross_entropy)
+
+# 評価関数定義
+with tf.name_scope('accuracy'):
+    correct_prediction = tf.equal(tf.argmax(y_conv, 1), tf.argmax(y_, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+    tf.summary.scalar('accuracy', accuracy)
+
+# 全Summariesを出力
+merged = tf.summary.merge_all()
+train_writer = tf.summary.FileWriter(log_dir + '/train', sess.graph) #訓練データ
+test_writer  = tf.summary.FileWriter(log_dir + '/test')              #テストデータ
+
+# 初期化
+tf.global_variables_initializer().run()
+
+# 訓練・テスト繰り返し    
+for i in range(210):
+    batch = mnist.train.next_batch(50)
+    """
+    # training実行
+    with tf.Session() as sess:
+      sess.run(tf.global_variables_initializer())
+      for i in range(100):
+        batch = mnist.train.next_batch(50)"""
+
+    if i % 100 == 0:
+          run_options  = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+          run_metadata = tf.RunMetadata()
+          summary, train_accuracy  = sess.run([merged, accuracy],feed_dict={x: batch[0], y_: batch[1], keep_prob: 1.0})
+          #train_accuracy = accuracy.eval(feed_dict={
+          #    x: batch[0], y_: batch[1], keep_prob: 1.0})
+          train_writer.add_summary(summary, i)
+          print('step %d, training accuracy %g' % (i, train_accuracy))
+
+    # evaluation実行
+    #100回ごとにテスト
+    elif i % 100 == 99:
+        summary_test, train_accuracy = sess.run([merged, accuracy], feed_dict={x: mnist.test.images, y_:mnist.test.labels, keep_prob: 1.0})
+        test_writer.add_summary(summary_test, i)
+    #summary, acc = accuracy.eval(feed_dict={
+    #    x: mnist.test.images, y_: mnist.test.labels, keep_prob: 0.5})
+
+    #  print('test accuracy %g' % accuracy.eval(feed_dict={
+    #      x: mnist.test.images, y_: mnist.test.labels, keep_prob: 0.5}))
+
+        
+    summary, _ = sess.run([merged, train_step], feed_dict={x: batch[0], y_: batch[1], keep_prob: 0.5})
+
+# TensorBoard向け出力
+    train_writer.add_summary(summary, i)  
+    
+print('test accuracy %g' % train_accuracy)
+
+# SummaryWriterクローズ
+train_writer.close()
+test_writer.close()
